@@ -2,8 +2,8 @@ use std::sync::Arc;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono;
 
-#[derive(serde::Deserialize, Debug)]
-struct Transaction {
+#[derive(serde::Deserialize)]
+struct TransactionRequest {
     tipo: String,
     valor: u64,
     descricao: String,
@@ -15,21 +15,21 @@ struct TransactionResponse {
     saldo: i64,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize)]
 pub struct AccountStatementResponse {
     pub saldo: Balance,
-    pub ultimas_transacoes: Vec<LastTransactions>,
+    pub ultimas_transacoes: Vec<TransactionInfo>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize)]
 pub struct Balance {
     pub total: i64,
     pub data_extrato: String,
     pub limite: i64,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct LastTransactions {
+#[derive(serde::Serialize)]
+pub struct TransactionInfo {
     pub valor: i64,
     pub tipo: String,
     pub descricao: String,
@@ -37,17 +37,16 @@ pub struct LastTransactions {
 }
 
 
-async fn do_transaction(path: web::Path<(u16,)>, data: web::Json<Transaction>) -> impl Responder {
-    println!("do transaction called with data {:?} and client_id {:?}", data, path.0);
+async fn do_transaction(path: web::Path<(u16,)>, transaction: web::Json<TransactionRequest>) -> impl Responder {
     if path.0 > 6 {
         return HttpResponse::NotFound().json("client not found");
     }
 
-    if data.tipo != "c" && data.tipo != "d" {
+    if transaction.tipo != "c" && transaction.tipo != "d" {
         return HttpResponse::BadRequest().json("type must be 'c' or 'd'");
     }
 
-    if data.descricao.len() < 1 || data.descricao.len() > 10 {
+    if transaction.descricao.len() < 1 || transaction.descricao.len() > 10 {
         return HttpResponse::BadRequest().json("description must be between 1 and 10 characters long");
     }
 
@@ -60,7 +59,6 @@ async fn do_transaction(path: web::Path<(u16,)>, data: web::Json<Transaction>) -
 }
 
 async fn fetch_account_statement(path: web::Path<(u16,)>) -> impl Responder {
-    println!("fetch account statement called");
     if path.0 > 6 {
         return HttpResponse::NotFound().json("client not found");
     }
@@ -73,13 +71,13 @@ async fn fetch_account_statement(path: web::Path<(u16,)>) -> impl Responder {
             limite: 1000,
         },
         ultimas_transacoes: vec![
-            LastTransactions {
+            TransactionInfo {
                 valor: 1000,
                 tipo: "c".to_string(),
                 descricao: "salario".to_string(),
                 realizada_em: chrono::Local::now().to_rfc3339(),
             },
-            LastTransactions {
+            TransactionInfo {
                 valor: 1000,
                 tipo: "d".to_string(),
                 descricao: "aluguel".to_string(),
