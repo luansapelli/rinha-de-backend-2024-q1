@@ -1,5 +1,5 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use sqlx::{PgPool};
+use sqlx::PgPool;
 
 #[derive(sqlx::FromRow, sqlx::Decode)]
 struct Client {
@@ -41,7 +41,11 @@ pub struct TransactionInfo {
     pub realizada_em: String,
 }
 
-async fn do_transaction(path: web::Path<(i16,)>, transaction: web::Json<TransactionRequest>, db_pool: web::Data<PgPool>) -> impl Responder {
+async fn do_transaction(
+    path: web::Path<(i16,)>,
+    transaction: web::Json<TransactionRequest>,
+    db_pool: web::Data<PgPool>,
+) -> impl Responder {
     if transaction.tipo != "c" && transaction.tipo != "d" {
         return HttpResponse::BadRequest().finish();
     }
@@ -50,9 +54,8 @@ async fn do_transaction(path: web::Path<(i16,)>, transaction: web::Json<Transact
         return HttpResponse::BadRequest().finish();
     }
 
-    let client = match sqlx::query_as::<_, Client>(
-        "SELECT * FROM clients WHERE id = $1",
-    )   .bind(path.0)
+    let client = match sqlx::query_as::<_, Client>("SELECT * FROM clients WHERE id = $1")
+        .bind(path.0)
         .fetch_one(db_pool.get_ref())
         .await
     {
@@ -69,7 +72,7 @@ async fn do_transaction(path: web::Path<(i16,)>, transaction: web::Json<Transact
             }
 
             potential_balance
-        },
+        }
         _ => return HttpResponse::BadRequest().finish(),
     };
 
@@ -104,10 +107,9 @@ async fn do_transaction(path: web::Path<(i16,)>, transaction: web::Json<Transact
         }
     }
 
-    //TODO -> remove mocked response
     HttpResponse::Ok().json(TransactionResponse {
         limite: client.limit_value,
-        saldo: new_balance
+        saldo: new_balance,
     })
 }
 
@@ -142,14 +144,22 @@ async fn fetch_account_statement(path: web::Path<(i16,)>) -> impl Responder {
 
 #[tokio::main]
 async fn main() {
-    let db_pool = PgPool::connect("postgres://postgres:password@localhost/rinha").await.expect("Can not connect to database");
+    let db_pool = PgPool::connect("postgres://postgres:password@localhost/rinha")
+        .await
+        .expect("Can not connect to database");
 
     HttpServer::new(move || {
         App::new()
             .route("/clientes/{id}/transacoes", web::post().to(do_transaction))
-            .route("/clientes/{id}/extrato", web::get().to(fetch_account_statement))
+            .route(
+                "/clientes/{id}/extrato",
+                web::get().to(fetch_account_statement),
+            )
             .app_data(web::Data::new(db_pool.clone()))
-        })
-        .bind("localhost:9999").expect("Can not bind to port 9999")
-        .run().await.expect("Can not start server");
+    })
+    .bind("localhost:9999")
+    .expect("Can not bind to port 9999")
+    .run()
+    .await
+    .expect("Can not start server");
 }
