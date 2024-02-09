@@ -1,11 +1,11 @@
-use std::sync::Arc;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono;
+use sqlx::{PgPool};
 
 #[derive(serde::Deserialize)]
 struct TransactionRequest {
     tipo: String,
-    valor: u64,
+    valor: i64,
     descricao: String,
 }
 
@@ -36,21 +36,36 @@ pub struct TransactionInfo {
     pub realizada_em: String,
 }
 
-
-async fn do_transaction(path: web::Path<(u16,)>, transaction: web::Json<TransactionRequest>) -> impl Responder {
-    if path.0 > 6 {
-        return HttpResponse::NotFound().json("client not found");
+async fn do_transaction(path: web::Path<(i16,)>, transaction: web::Json<TransactionRequest>, db_pool: web::Data<PgPool>) -> impl Responder {
+    if path.0 < 0 || path.0 > 5 {
+        return HttpResponse::NotFound().finish();
     }
 
     if transaction.tipo != "c" && transaction.tipo != "d" {
-        return HttpResponse::BadRequest().json("type must be 'c' or 'd'");
+        return HttpResponse::BadRequest().finish();
     }
 
     if transaction.descricao.len() < 1 || transaction.descricao.len() > 10 {
-        return HttpResponse::BadRequest().json("description must be between 1 and 10 characters long");
+        return HttpResponse::BadRequest().finish();
     }
 
-    //todo -> persistence and transaction logic
+    let mut db_transaction = db_pool.begin().await.expect("Can not start transaction");
+    match sqlx::query(r#"INSERT INTO transactions (client_id, value, "type", description) VALUES ($1, $2, $3, $4)"#)
+        .bind(path.0)
+        .bind(transaction.valor)
+        .bind(transaction.tipo.as_str())
+        .bind(transaction.descricao.as_str())
+        .execute(&mut *db_transaction)
+        .await
+    {
+        Ok(_) => {
+            db_transaction.commit().await.expect("Can not commit transaction");
+        }
+        Err(_) => {
+            db_transaction.rollback().await.expect("Can not rollback transaction");
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
 
     HttpResponse::Ok().json(TransactionResponse {
         limite: 1000,
@@ -58,9 +73,9 @@ async fn do_transaction(path: web::Path<(u16,)>, transaction: web::Json<Transact
     })
 }
 
-async fn fetch_account_statement(path: web::Path<(u16,)>) -> impl Responder {
-    if path.0 > 6 {
-        return HttpResponse::NotFound().json("client not found");
+async fn fetch_account_statement(path: web::Path<(i16,)>) -> impl Responder {
+    if path.0 > 5 {
+        return HttpResponse::NotFound().finish();
     }
 
     //todo -> persistence and transaction logic
@@ -89,11 +104,15 @@ async fn fetch_account_statement(path: web::Path<(u16,)>) -> impl Responder {
 
 #[tokio::main]
 async fn main() {
-    let _server = HttpServer::new(|| {
+
+    let db_pool = PgPool::connect("postgres://postgres:password@localhost/rinha").await.expect("Can not connect to database");
+
+    let _server = HttpServer::new(move || {
         App::new()
             .route("/clientes/{id}/transacoes", web::post().to(do_transaction))
             .route("/clientes/{id}/extrato", web::get().to(fetch_account_statement))
+            .app_data(web::Data::new(db_pool.clone()))
         })
         .bind("localhost:9999").expect("Can not bind to port 9999")
-        .run().await.unwrap();
+        .run().await.expect("Can not start server");
 }
