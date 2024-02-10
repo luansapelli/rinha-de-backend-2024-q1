@@ -8,9 +8,9 @@ CREATE TABLE transactions (
     id SERIAL PRIMARY KEY,
     client_id INTEGER REFERENCES clients,
     value INTEGER NOT NULL,
-    type CHAR(1) NOT NULL,
+    tran_type CHAR(1) NOT NULL,
     description VARCHAR(10) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at VARCHAR(32) NOT NULL
 );
 
 CREATE INDEX index_client_id_transactions ON transactions (client_id);

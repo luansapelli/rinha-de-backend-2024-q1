@@ -1,8 +1,20 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use chrono;
 use sqlx::PgPool;
 
-#[derive(sqlx::FromRow, sqlx::Decode)]
+#[derive(sqlx::FromRow, sqlx::Decode, Debug)]
 struct Client {
+    limit_value: i32,
+    balance: i32,
+}
+
+#[derive(sqlx::FromRow, Debug)]
+struct Transactions {
+    client_id: i32,
+    value: Option<i32>,
+    tran_type: Option<String>,
+    description: Option<String>,
+    created_at: Option<String>,
     limit_value: i32,
     balance: i32,
 }
@@ -11,7 +23,7 @@ struct Client {
 struct TransactionRequest {
     tipo: String,
     valor: i32,
-    descricao: String,
+    descricao: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -46,12 +58,23 @@ async fn do_transaction(
     transaction: web::Json<TransactionRequest>,
     db_pool: web::Data<PgPool>,
 ) -> impl Responder {
-    if transaction.tipo != "c" && transaction.tipo != "d" {
-        return HttpResponse::BadRequest().finish();
+    if path.0 > 5 {
+        return HttpResponse::NotFound().finish();
     }
 
-    if transaction.descricao.is_empty() || transaction.descricao.len() > 10 {
-        return HttpResponse::BadRequest().finish();
+    if transaction.tipo != "c" && transaction.tipo != "d" {
+        return HttpResponse::UnprocessableEntity().finish();
+    }
+
+    match &transaction.descricao {
+        Some(description) => {
+            if description.len() < 1 || description.len() > 10 {
+                return HttpResponse::UnprocessableEntity().finish();
+            }
+        },
+        None => {
+            return HttpResponse::UnprocessableEntity().finish();
+        }
     }
 
     let client = match sqlx::query_as::<_, Client>("SELECT * FROM clients WHERE id = $1")
@@ -77,11 +100,12 @@ async fn do_transaction(
     };
 
     let mut db_transaction = db_pool.begin().await.expect("Can not start transaction");
-    match sqlx::query(r#"INSERT INTO transactions (client_id, value, "type", description) VALUES ($1, $2, $3, $4)"#)
+    match sqlx::query(r#"INSERT INTO transactions (client_id, value, tran_type, description, created_at) VALUES ($1, $2, $3, $4, $5)"#)
         .bind(path.0)
         .bind(transaction.valor)
         .bind(transaction.tipo.as_str())
-        .bind(transaction.descricao.as_str())
+        .bind(&transaction.descricao)
+        .bind(chrono::Utc::now().to_rfc3339())
         .execute(&mut *db_transaction)
         .await
     {
@@ -113,33 +137,72 @@ async fn do_transaction(
     })
 }
 
-async fn fetch_account_statement(path: web::Path<(i16,)>) -> impl Responder {
+async fn fetch_account_statement(
+    path: web::Path<(i16,)>,
+    db_pool: web::Data<PgPool>,
+) -> impl Responder {
     if path.0 > 5 {
         return HttpResponse::NotFound().finish();
     }
 
-    //todo -> persistence and transaction logic
-    HttpResponse::Ok().json(AccountStatementResponse {
-        saldo: Balance {
-            total: 1000,
-            data_extrato: chrono::Local::now().to_rfc3339(),
-            limite: 1000,
+    match sqlx::query_as::<_, Transactions>(
+    r#"
+            SELECT
+                c.id AS client_id,
+                t.value,
+                t.tran_type,
+                t.description,
+                t.created_at,
+                c.limit_value,
+                c.balance
+            FROM
+                clients c
+            LEFT JOIN
+                transactions t ON c.id = t.client_id
+            WHERE
+                c.id = 1
+            ORDER BY
+                t.created_at DESC
+            LIMIT
+                10;
+        "#)
+    .bind(path.0)
+    .fetch_all(db_pool.get_ref())
+    .await
+    {
+        Ok(transactions) => {
+            if transactions.is_empty() {
+                return HttpResponse::Ok().json(AccountStatementResponse {
+                    saldo: Balance {
+                        total: transactions[0].balance,
+                        data_extrato: chrono::Utc::now().to_rfc3339(),
+                        limite: transactions[0].limit_value,
+                    },
+                    ultimas_transacoes: vec![],
+                });
+            }
+
+            HttpResponse::Ok().json(AccountStatementResponse {
+                saldo: Balance {
+                    total: transactions[0].balance,
+                    data_extrato: chrono::Utc::now().to_rfc3339(),
+                    limite: transactions[0].limit_value,
+                },
+                ultimas_transacoes: transactions
+                    .iter()
+                    .map(|t| TransactionInfo {
+                        valor: t.value.clone().unwrap_or(0),
+                        tipo: t.tran_type.clone().unwrap_or("".to_string()),
+                        descricao: t.description.clone().unwrap_or("".to_string()),
+                        realizada_em: t.created_at.clone().unwrap_or("".to_string()),
+                    })
+                    .collect(),
+            })
         },
-        ultimas_transacoes: vec![
-            TransactionInfo {
-                valor: 1000,
-                tipo: "c".to_string(),
-                descricao: "salario".to_string(),
-                realizada_em: chrono::Local::now().to_rfc3339(),
-            },
-            TransactionInfo {
-                valor: 1000,
-                tipo: "d".to_string(),
-                descricao: "aluguel".to_string(),
-                realizada_em: chrono::Local::now().to_rfc3339(),
-            },
-        ],
-    })
+        Err(_) => {
+            return HttpResponse::NotFound().finish()
+        },
+    }
 }
 
 #[tokio::main]
