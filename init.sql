@@ -1,3 +1,5 @@
+ALTER DATABASE rinha SET synchronous_commit=OFF;
+
 CREATE TABLE clients (
     id SERIAL PRIMARY KEY,
     limit_value INTEGER NOT NULL,

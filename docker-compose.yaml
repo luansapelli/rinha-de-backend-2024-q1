@@ -1,14 +1,52 @@
 version: "3.5"
 
 services:
-  db:
-    image: postgres:latest
-    hostname: db
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=postgres
-      - POSTGRES_DB=rinha
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+#      app: &app
+#        image: rinha
+#        build:
+#          context: .
+#          dockerfile: Dockerfile
+#        ports:
+#        - "3000:3000"
+#        hostname: app
+#        depends_on:
+#        - db
+#        environment:
+#        - DATABASE_URL=postgres://postgres:password@db:5432/rinha
+#
+#      app2:
+#        <<: *app
+#        ports:
+#          - "3001:3000"
+#        hostname: app2
+
+      db:
+        image: postgres:latest
+        hostname: db
+        environment:
+          - POSTGRES_PASSWORD=password
+          - POSTGRES_USER=postgres
+          - POSTGRES_DB=rinha
+        ports:
+          - "5432:5432"
+        volumes:
+        - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+#        - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf
+#
+#      pgbouncer:
+#        image: edoburu/pgbouncer
+#        environment:
+#          - DB_USER=postgres
+#          - DB_PASSWORD=password
+#          - DB_NAME=rinha
+#          - DB_HOST=db
+#          - POOL_MODE=statement
+#          - ADMIN_USERS=postgres
+#        ports:
+#          - "5432:5432"
+#        depends_on:
+#          - db
+#
+#networks:
+#  backend:
+#    driver: bridge

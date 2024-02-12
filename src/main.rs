@@ -2,13 +2,13 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono;
 use sqlx::PgPool;
 
-#[derive(sqlx::FromRow, sqlx::Decode, Debug)]
+#[derive(sqlx::FromRow)]
 struct Client {
     limit_value: i32,
     balance: i32,
 }
 
-#[derive(sqlx::FromRow, Debug)]
+#[derive(sqlx::FromRow)]
 struct Transactions {
     client_id: i32,
     value: Option<i32>,
@@ -19,10 +19,10 @@ struct Transactions {
     balance: i32,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 struct TransactionRequest {
-    tipo: String,
-    valor: i32,
+    tipo: Option<String>,
+    valor: Option<i32>,
     descricao: Option<String>,
 }
 
@@ -55,27 +55,51 @@ pub struct TransactionInfo {
 
 async fn do_transaction(
     path: web::Path<(i16,)>,
-    transaction: web::Json<TransactionRequest>,
+    bytes: web::Bytes,
     db_pool: web::Data<PgPool>,
 ) -> impl Responder {
     if path.0 > 5 {
         return HttpResponse::NotFound().finish();
     }
 
-    if transaction.tipo != "c" && transaction.tipo != "d" {
-        return HttpResponse::UnprocessableEntity().finish();
-    }
+    let transaction  = match serde_json::from_slice::<TransactionRequest>(&bytes) {
+        Ok(transaction) => transaction,
+        Err(_) => {
+            return HttpResponse::UnprocessableEntity().finish()
+        },
+    };
 
-    match &transaction.descricao {
+    let description = match &transaction.descricao {
         Some(description) => {
             if description.len() < 1 || description.len() > 10 {
                 return HttpResponse::UnprocessableEntity().finish();
             }
+
+            description
         },
         None => {
             return HttpResponse::UnprocessableEntity().finish();
         }
-    }
+    };
+
+    let transaction_type = match transaction.tipo.as_deref() {
+        Some("c") => "c",
+        Some("d") => "d",
+        _ => return HttpResponse::UnprocessableEntity().finish(),
+    };
+
+    let value = match transaction.valor {
+        Some(value) => {
+            if value < 1 {
+                return HttpResponse::UnprocessableEntity().finish();
+            }
+
+            value
+        },
+        None => {
+            return HttpResponse::UnprocessableEntity().finish();
+        }
+    };
 
     let client = match sqlx::query_as::<_, Client>("SELECT * FROM clients WHERE id = $1")
         .bind(path.0)
@@ -86,25 +110,25 @@ async fn do_transaction(
         Err(_) => return HttpResponse::NotFound().finish(),
     };
 
-    let new_balance = match transaction.tipo.as_str() {
-        "c" => client.balance + transaction.valor,
+    let new_balance = match transaction_type {
+        "c" => client.balance + value,
         "d" => {
-            let potential_balance = client.balance - transaction.valor;
+            let potential_balance = client.balance - value;
             if potential_balance < -client.limit_value {
                 return HttpResponse::UnprocessableEntity().finish();
             }
 
             potential_balance
         }
-        _ => return HttpResponse::BadRequest().finish(),
+        _ => return HttpResponse::UnprocessableEntity().finish(),
     };
 
     let mut db_transaction = db_pool.begin().await.expect("Can not start transaction");
     match sqlx::query(r#"INSERT INTO transactions (client_id, value, tran_type, description, created_at) VALUES ($1, $2, $3, $4, $5)"#)
         .bind(path.0)
-        .bind(transaction.valor)
-        .bind(transaction.tipo.as_str())
-        .bind(&transaction.descricao)
+        .bind(value)
+        .bind(transaction_type)
+        .bind(description)
         .bind(chrono::Utc::now().to_rfc3339())
         .execute(&mut *db_transaction)
         .await
@@ -137,6 +161,28 @@ async fn do_transaction(
     })
 }
 
+
+const FETCH_ACCOUNT_STATEMENT_QUERY: &str = r#"
+    SELECT
+        c.id AS client_id,
+        t.value,
+        t.tran_type,
+        t.description,
+        t.created_at,
+        c.limit_value,
+        c.balance
+    FROM
+        clients c
+    LEFT JOIN
+        transactions t ON c.id = t.client_id
+    WHERE
+        c.id = $1
+    ORDER BY
+        t.created_at DESC
+    LIMIT
+        10;
+"#;
+
 async fn fetch_account_statement(
     path: web::Path<(i16,)>,
     db_pool: web::Data<PgPool>,
@@ -145,27 +191,7 @@ async fn fetch_account_statement(
         return HttpResponse::NotFound().finish();
     }
 
-    match sqlx::query_as::<_, Transactions>(
-    r#"
-            SELECT
-                c.id AS client_id,
-                t.value,
-                t.tran_type,
-                t.description,
-                t.created_at,
-                c.limit_value,
-                c.balance
-            FROM
-                clients c
-            LEFT JOIN
-                transactions t ON c.id = t.client_id
-            WHERE
-                c.id = 1
-            ORDER BY
-                t.created_at DESC
-            LIMIT
-                10;
-        "#)
+    match sqlx::query_as::<_, Transactions>(FETCH_ACCOUNT_STATEMENT_QUERY)
     .bind(path.0)
     .fetch_all(db_pool.get_ref())
     .await
