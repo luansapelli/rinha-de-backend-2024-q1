@@ -1,6 +1,6 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono;
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Row};
 
 #[derive(sqlx::FromRow)]
 struct Client {
@@ -69,96 +69,64 @@ async fn do_transaction(
         },
     };
 
-    let description = match &transaction.descricao {
+    let transaction_description = match transaction.descricao {
         Some(description) => {
             if description.len() < 1 || description.len() > 10 {
-                return HttpResponse::UnprocessableEntity().finish();
+            return HttpResponse::UnprocessableEntity().finish();
             }
 
             description
         },
-        None => {
-            return HttpResponse::UnprocessableEntity().finish();
-        }
+        None => return HttpResponse::UnprocessableEntity().finish(),
     };
 
-    let transaction_type = match transaction.tipo.as_deref() {
-        Some("c") => "c",
-        Some("d") => "d",
-        _ => return HttpResponse::UnprocessableEntity().finish(),
+
+    let transaction_type = match transaction.tipo {
+        Some(tran_type) => {
+            if tran_type != "c" && tran_type != "d" {
+                return HttpResponse::UnprocessableEntity().finish();
+            }
+
+            tran_type
+        },
+        None => return HttpResponse::UnprocessableEntity().finish(),
     };
 
-    let value = match transaction.valor {
+    let transaction_value = match transaction.valor {
         Some(value) => {
-            if value < 1 {
+            if value < 0 {
                 return HttpResponse::UnprocessableEntity().finish();
             }
 
             value
         },
-        None => {
-            return HttpResponse::UnprocessableEntity().finish();
-        }
-    };
-
-    let client = match sqlx::query_as::<_, Client>("SELECT * FROM clients WHERE id = $1")
-        .bind(path.0)
-        .fetch_one(db_pool.get_ref())
-        .await
-    {
-        Ok(client) => client,
-        Err(_) => return HttpResponse::NotFound().finish(),
-    };
-
-    let new_balance = match transaction_type {
-        "c" => client.balance + value,
-        "d" => {
-            let potential_balance = client.balance - value;
-            if potential_balance < -client.limit_value {
-                return HttpResponse::UnprocessableEntity().finish();
-            }
-
-            potential_balance
-        }
-        _ => return HttpResponse::UnprocessableEntity().finish(),
+        None => return HttpResponse::UnprocessableEntity().finish(),
     };
 
     let mut db_transaction = db_pool.begin().await.expect("Can not start transaction");
-    match sqlx::query(r#"INSERT INTO transactions (client_id, value, tran_type, description, created_at) VALUES ($1, $2, $3, $4, $5)"#)
+    match sqlx::query(r#"
+                SELECT * FROM process_transaction($1, $2, $3, $4, $5) AS result;
+            "#)
         .bind(path.0)
-        .bind(value)
+        .bind(transaction_value)
         .bind(transaction_type)
-        .bind(description)
+        .bind(transaction_description)
         .bind(chrono::Utc::now().to_rfc3339())
-        .execute(&mut *db_transaction)
+        .fetch_one(&mut *db_transaction)
         .await
     {
-        Ok(_) => {
-            match sqlx::query(r#"UPDATE clients SET balance = $1 WHERE id = $2"#)
-                .bind(new_balance)
-                .bind(path.0)
-                .execute(&mut *db_transaction)
-                .await
-            {
-                Ok(_) => {},
-                Err(_) => {
-                    db_transaction.rollback().await.expect("Can not rollback transaction");
-                    return HttpResponse::InternalServerError().finish();
-                }
-            }
-
+        Ok(result) => {
             db_transaction.commit().await.expect("Can not commit transaction");
+            HttpResponse::Ok().json(TransactionResponse {
+                limite: result.get(0),
+                saldo: result.get(1),
+            })
         }
         Err(_) => {
             db_transaction.rollback().await.expect("Can not rollback transaction");
-            return HttpResponse::InternalServerError().finish();
+            HttpResponse::InternalServerError().finish()
         }
     }
-
-    HttpResponse::Ok().json(TransactionResponse {
-        limite: client.limit_value,
-        saldo: new_balance,
-    })
 }
 
 
