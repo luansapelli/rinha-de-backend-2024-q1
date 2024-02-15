@@ -1,6 +1,8 @@
+use std::env;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono;
 use sqlx::{Executor, PgPool, Row};
+use tokio::net::TcpListener;
 
 #[derive(sqlx::FromRow)]
 struct Client {
@@ -201,9 +203,17 @@ async fn fetch_account_statement(
 
 #[tokio::main]
 async fn main() {
-    let db_pool = PgPool::connect("postgres://postgres:password@localhost/rinha")
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    let db_pool = match PgPool::connect(database_url.as_str())
         .await
-        .expect("Can not connect to database");
+    {
+        Ok(pool) => pool,
+        Err(err) => {
+            eprintln!("Can not connect to database: {:?}", err);
+            return;
+        }
+    };
 
     HttpServer::new(move || {
         App::new()
