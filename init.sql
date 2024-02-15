@@ -10,19 +10,19 @@ CREATE UNLOGGED TABLE transactions (
     value INTEGER NOT NULL,
     tran_type CHAR(1) NOT NULL,
     description VARCHAR(10) NOT NULL,
-    created_at VARCHAR(32) NOT NULL
+    created_at VARCHAR(45) NOT NULL
 );
 
+CREATE INDEX index_id_clients ON clients (id);
 CREATE INDEX index_client_id_created_at_transactions ON transactions (client_id, created_at DESC);
 CREATE INDEX index_client_id_transactions ON transactions (client_id);
-CREATE INDEX index_client_id_clients on clients (id);
 
 CREATE OR REPLACE FUNCTION process_transaction(
     p_client_id INTEGER,
     p_value INTEGER,
     p_tran_type CHAR(1),
     p_description VARCHAR(10),
-    p_created_at VARCHAR(32)
+    p_created_at VARCHAR(45)
 ) RETURNS TABLE (balance INT, limit_value INT) AS $$
 DECLARE
 new_balance INT;
@@ -42,6 +42,40 @@ WHERE c.id = p_client_id
 RETURN QUERY SELECT new_balance, c.limit_value FROM clients c WHERE c.id = p_client_id;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION get_account_statement(client_id_param INTEGER)
+RETURNS TABLE (
+    client_id INTEGER,
+    value INTEGER,
+    tran_type CHAR(1),
+    description VARCHAR(10),
+    created_at VARCHAR(45),
+    limit_value INTEGER,
+    balance INTEGER
+) AS $$
+BEGIN
+RETURN QUERY
+SELECT
+    c.id AS client_id,
+    t.value,
+    t.tran_type,
+    t.description,
+    t.created_at,
+    c.limit_value,
+    c.balance
+FROM
+    clients c
+        LEFT JOIN
+    transactions t ON c.id = t.client_id
+WHERE
+    c.id = client_id_param
+ORDER BY
+    t.created_at DESC
+    LIMIT
+        10;
+END;
+$$ LANGUAGE plpgsql;
+
 
 DO $$
 BEGIN

@@ -1,18 +1,16 @@
 use std::env;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use chrono;
-use sqlx::{Executor, PgPool, Row};
-use tokio::net::TcpListener;
+use sqlx::{PgPool, Row};
 
-#[derive(sqlx::FromRow)]
-struct Client {
-    limit_value: i32,
-    balance: i32,
-}
+// #[derive(sqlx::FromRow)]
+// struct Client {
+//     limit_value: i32,
+//     balance: i32,
+// }
 
 #[derive(sqlx::FromRow)]
 struct Transactions {
-    client_id: i32,
+    // client_id: i32,
     value: Option<i32>,
     tran_type: Option<String>,
     description: Option<String>,
@@ -73,8 +71,8 @@ async fn do_transaction(
 
     let transaction_description = match transaction.descricao {
         Some(description) => {
-            if description.len() < 1 || description.len() > 10 {
-            return HttpResponse::UnprocessableEntity().finish();
+            if description.is_empty() || description.len() > 10 {
+                return HttpResponse::UnprocessableEntity().finish();
             }
 
             description
@@ -105,7 +103,6 @@ async fn do_transaction(
         None => return HttpResponse::UnprocessableEntity().finish(),
     };
 
-    let mut db_transaction = db_pool.begin().await.expect("Can not start transaction");
     match sqlx::query(r#"
                 SELECT * FROM process_transaction($1, $2, $3, $4, $5) AS result;
             "#)
@@ -114,61 +111,61 @@ async fn do_transaction(
         .bind(transaction_type)
         .bind(transaction_description)
         .bind(chrono::Utc::now().to_rfc3339())
-        .fetch_one(&mut *db_transaction)
+        .fetch_one(db_pool.get_ref())
         .await
     {
         Ok(result) => {
-            db_transaction.commit().await.expect("Can not commit transaction");
             HttpResponse::Ok().json(TransactionResponse {
                 limite: result.get(0),
                 saldo: result.get(1),
             })
         }
         Err(_) => {
-            db_transaction.rollback().await.expect("Can not rollback transaction");
             HttpResponse::InternalServerError().finish()
         }
     }
 }
 
 
-const FETCH_ACCOUNT_STATEMENT_QUERY: &str = r#"
-    SELECT
-        c.id AS client_id,
-        t.value,
-        t.tran_type,
-        t.description,
-        t.created_at,
-        c.limit_value,
-        c.balance
-    FROM
-        clients c
-    LEFT JOIN
-        transactions t ON c.id = t.client_id
-    WHERE
-        c.id = $1
-    ORDER BY
-        t.created_at DESC
-    LIMIT
-        10;
-"#;
+// const FETCH_ACCOUNT_STATEMENT_QUERY: &str = r#"
+//     SELECT
+//         c.id AS client_id,
+//         t.value,
+//         t.tran_type,
+//         t.description,
+//         t.created_at,
+//         c.limit_value,
+//         c.balance
+//     FROM
+//         clients c
+//     LEFT JOIN
+//         transactions t ON c.id = t.client_id
+//     WHERE
+//         c.id = $1
+//     ORDER BY
+//         t.created_at DESC
+//     LIMIT
+//         10;
+// "#;
 
 async fn fetch_account_statement(
     path: web::Path<(i16,)>,
     db_pool: web::Data<PgPool>,
 ) -> impl Responder {
     if path.0 > 5 {
-        return HttpResponse::NotFound().finish();
+        HttpResponse::NotFound().finish();
     }
 
-    match sqlx::query_as::<_, Transactions>(FETCH_ACCOUNT_STATEMENT_QUERY)
-    .bind(path.0)
-    .fetch_all(db_pool.get_ref())
-    .await
+   match sqlx::query_as::<_, Transactions>(
+        "SELECT * FROM get_account_statement($1)",
+    )
+        .bind(path.0)
+        .fetch_all(db_pool.get_ref())
+        .await
     {
         Ok(transactions) => {
             if transactions.is_empty() {
-                return HttpResponse::Ok().json(AccountStatementResponse {
+                HttpResponse::Ok().json(AccountStatementResponse {
                     saldo: Balance {
                         total: transactions[0].balance,
                         data_extrato: chrono::Utc::now().to_rfc3339(),
@@ -187,7 +184,7 @@ async fn fetch_account_statement(
                 ultimas_transacoes: transactions
                     .iter()
                     .map(|t| TransactionInfo {
-                        valor: t.value.clone().unwrap_or(0),
+                        valor: t.value.unwrap_or(0),
                         tipo: t.tran_type.clone().unwrap_or("".to_string()),
                         descricao: t.description.clone().unwrap_or("".to_string()),
                         realizada_em: t.created_at.clone().unwrap_or("".to_string()),
@@ -196,7 +193,7 @@ async fn fetch_account_statement(
             })
         },
         Err(_) => {
-            return HttpResponse::NotFound().finish()
+            HttpResponse::NotFound().finish()
         },
     }
 }
