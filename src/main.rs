@@ -224,8 +224,8 @@ async fn main() {
             )
             .app_data(web::Data::new(db_pool.clone()))
     })
-    .bind("localhost:9999")
-    .expect("Can not bind to port 9999")
+    .bind("0.0.0.0:8000")
+    .expect("Can not bind to port 8000")
     .run()
     .await
     .expect("Can not start server");
